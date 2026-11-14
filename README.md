@@ -1,39 +1,27 @@
 # DescentCore
 
-A verified kernel for descent systems, in Lean 4 (core Lean only — no Mathlib).
+The descent core, and everything that stands on it — in one repository.
 
-A **descent system** is a set of states carrying a natural-number energy and a step function, such that:
+Four self-contained Lean 4 files (core Lean only, no Mathlib), each one a rung built on the last, each one complete on its own:
 
-- the energy strictly decreases at every step while it is positive, and
-- a state of energy zero never moves.
+## The four files
 
-`DescentCore.lean` proves, for **every** such system:
+- **`DescentCore.lean` — the kernel.** For any *descent system* — a step function with a natural-number energy that strictly decreases until it reaches zero — termination within the initial energy and the attractor property (the reached state is a rest state the orbit never leaves) are proved once, as theorems, for all such systems.
+- **`UniversalCore.lean` — the universal machine.** A universal register machine (`inc`, `dec`-with-jump, `jmp`, `halt`; unbounded natural registers) on the kernel: any program carrying a measure that decreases between non-halting states is proved to halt within `μ s + 1` steps and rest there (`machine_halts`), with a verified end-to-end example (`progZero`).
+- **`VonNeumannCore.lean` — the stored program.** Instructions encoded as data in memory, three cells per instruction (`decode_encode`, `encodeMem_encodes`); one fetch–decode–execute interpreter proved to simulate the direct machine step for step (`vsim`, `vsim_iter`); the termination guarantee transferred to interpreted execution (`interpreter_halts`); `progZero` run from memory to the same proved final state (`progZero_interpreted`).
+- **`TowerCore.lean` — the tower.** Systems stacked on the base layer: under one interface condition — each upper layer preserves the rest sets of the layers below it — a tower of any height is proved to be again a descent system of exactly the base form (`towerSys`) and to reach the joint rest state where every layer's energy is zero (`tower_halts`), instantiated with the two countdown machines (`two_countdowns_tower`). The earlier rungs are included in the same file, so the tower stands on them literally as well as conceptually.
 
-- **Termination within a bound** (`terminates_within`): from any state `s`, the orbit reaches an energy-zero state within `energy s` steps.
-- **The attractor** (`reaches_rest`): the state reached is a rest state, and once the orbit arrives there, it stays there forever.
+## Honest scope
 
-Convergence is derived from strict energy descent. **No convergence axiom is assumed.**
-
-## Why this exists
-
-This is the shared pattern underneath the ExtremalMachine line of work and the 2026 blueprints — OSBlueprint, NewComputer, NewAI, YamamotoEvolution. Each of them is a descent system in the sense defined here. DescentCore states and proves the common kernel once, so the instances do not have to repeat the argument. The halving machine (repeated halving of a natural number reaches zero within `n` steps) is included as a small concrete instance.
+- The Turing completeness of the register-machine model itself is the classical result and is not re-proved here; what is proved is the halting guarantee for measured programs.
+- What the stacking construction produces is a system of the base form together with its guarantees — not a new physical machine. The layer interface is a real condition: arbitrary systems do not stack.
+- Claims are exactly what the theorems say — no more.
 
 ## Verification
 
-- Lean 4, core library only (no Mathlib dependency).
-- No `sorry`, no placeholders.
-- `#print axioms` for the main theorems reports only `[propext, Quot.sound]` — the standard logical axioms, and no `sorryAx`.
-
-To check:
-
-```
-lean DescentCore.lean
-```
-
-## Author
-
-Takeo Yamamoto
+- Lean 4 (core only), no Mathlib, no `sorry`. `#print axioms` on the main theorems reports only `[propext, Quot.sound]`.
+- CI compiles all four files and fails if any `sorry` warning appears.
 
 ## License
 
-Apache License 2.0
+Apache License 2.0. See `LICENSE`.
