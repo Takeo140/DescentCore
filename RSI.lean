@@ -1,35 +1,37 @@
 /-
-# RSI — Relative Strength Index
+# RSI — Recursive Self-Improvement
 
-The Relative Strength Index, the momentum indicator published by
-J. Welles Wilder Jr. in 1978, computed exactly over the rational
-numbers (core Lean only, no Mathlib).
+A formal kernel for recursive self-improvement, in the descent style of
+DescentCore.
 
-Given a list of prices, the changes between consecutive prices split
-into gains and losses. Wilder's method averages them with a smoothing
-recursion (an exponential average with factor `1 / period`):
+A self-improving system is a state space together with an improvement
+procedure `improve` that the system applies to its own current state —
+the state describes the whole system, including the current configuration
+of its improvement procedure — and a natural-number `defect` measuring
+how far the state is from a self-consistent one. The defining conditions:
 
-* the first average is the plain mean of the first `period` changes,
-* each later change updates the average by
-  `avg := (avg * (period - 1) + current) / period`.
+* **Progress.** While the defect is positive, one self-application of
+  `improve` strictly lowers it.
+* **Consistency.** A state of defect zero is a fixed point of `improve`:
+  the system no longer rewrites itself.
 
-From the final averages `g` (gain) and `l` (loss) the index is
+For any such system, this file proves — as theorems, not axioms:
 
-    RSI = 100 - 100 / (1 + g / l)  =  100 * g / (g + l),
+* **Termination within a bound.** Iterated self-improvement reaches a
+  defect-zero state within `defect s` steps.
+* **The self-consistent attractor.** The state reached is a fixed point
+  of `improve`, and once the orbit arrives there it stays there forever.
+* **Monotonicity.** Self-improvement never makes the defect worse.
+* **Self-acceleration.** The system may rewrite its own improvement
+  procedure by self-composition (`accelerate`: the new procedure is the
+  old one applied twice). The accelerated system is again a
+  self-improving system with the same defect, its `n`-step run equals
+  the original `2n`-step run, and termination within the same bound is
+  preserved under arbitrarily many such self-rewritings (`metaRun`).
 
-with the conventional edge cases: no loss at all gives 100, and no
-movement at all gives the neutral 50.
-
-This file proves — as theorems, not axioms:
-
-* **Bounds.** Whenever the average loss is nonzero, the value from
-  `rsiFromAverages` lies in `[0, 100]`.
-* **Edge cases.** `rsiFromAverages 0 0 = 50` and, for `g ≠ 0`,
-  `rsiFromAverages g 0 = 100`.
-* **A worked sample** (by evaluation, below). The price series used
-  to check the companion Python implementation (`rsi.py` in this
-  repository) gives the same final value here, as an exact rational
-  number.
+Convergence is derived from strict defect descent. No convergence axiom
+is assumed. The countdown machine at the bottom is a small concrete
+instance: repeated halving of a natural number reaches zero.
 
 Author: Takeo Yamamoto
 License: Apache-2.0
@@ -37,126 +39,193 @@ License: Apache-2.0
 
 namespace RSI
 
-/-- The gain of a single price change: the change itself if it is
-positive, otherwise zero. -/
-def gain (d : Rat) : Rat :=
-  if 0 < d then d else 0
+/-- A recursively self-improving system: an improvement procedure the
+system applies to its own current state, a defect into the natural
+numbers, strict progress while the defect is positive, and fixed points
+at defect zero. -/
+structure SelfImprover (S : Type) where
+  improve : S → S
+  defect : S → Nat
+  progress : ∀ s, defect s ≠ 0 → defect (improve s) < defect s
+  consistent : ∀ s, defect s = 0 → improve s = s
 
-/-- The loss of a single price change: the size of the change if it is
-negative, otherwise zero. -/
-def loss (d : Rat) : Rat :=
-  gain (-d)
+variable {S : Type}
 
-theorem gain_nonneg (d : Rat) : 0 ≤ gain d := by
-  by_cases h : 0 < d
-  · unfold gain
-    rw [ite_eq_left h]
-    exact (Rat.lt_iff_le_and_ne).mp h |>.1
-  · unfold gain
-    rw [ite_eq_right h]
-    decide
+/-- `run sys n s` is the state reached after `n` rounds of
+self-improvement from `s`. -/
+def run (sys : SelfImprover S) : Nat → S → S
+  | 0, s => s
+  | n + 1, s => sys.improve (run sys n s)
 
-theorem loss_nonneg (d : Rat) : 0 ≤ loss d :=
-  gain_nonneg (-d)
+theorem run_zero (sys : SelfImprover S) (s : S) : run sys 0 s = s :=
+  rfl
 
-/-- The changes between consecutive prices. -/
-def changes : List Rat → List Rat
-  | [] => []
-  | [_] => []
-  | a :: b :: rest => (b - a) :: changes (b :: rest)
+theorem run_succ (sys : SelfImprover S) (n : Nat) (s : S) :
+    run sys (n + 1) s = sys.improve (run sys n s) :=
+  rfl
 
-/-- The index from average gain and average loss, in the fraction form
-`100 * g / (g + l)`, with the conventional edge cases when the average
-loss is zero. -/
-def rsiFromAverages (avgGain avgLoss : Rat) : Rat :=
-  if avgLoss = 0 then
-    if avgGain = 0 then 50 else 100
-  else
-    100 * avgGain / (avgGain + avgLoss)
+/-- One round of self-improvement never increases the defect. -/
+theorem defect_improve_le (sys : SelfImprover S) (s : S) :
+    sys.defect (sys.improve s) ≤ sys.defect s := by
+  by_cases h0 : sys.defect s = 0
+  · rw [sys.consistent s h0]
+    exact Nat.le_refl _
+  · exact Nat.le_of_lt (sys.progress s h0)
 
-/-- The inverse of a nonnegative rational is nonnegative. -/
-theorem inv_nonneg {q : Rat} (h : 0 ≤ q) : 0 ≤ q⁻¹ := by
-  rw [Rat.inv_def]
-  exact Rat.divInt_nonneg (by omega) (Rat.num_nonneg.mpr h)
+/-- Self-improvement is monotone: each further round leaves the defect
+no larger than the previous round did. -/
+theorem defect_run_mono (sys : SelfImprover S) (n : Nat) (s : S) :
+    sys.defect (run sys (n + 1) s) ≤ sys.defect (run sys n s) := by
+  show sys.defect (sys.improve (run sys n s)) ≤ sys.defect (run sys n s)
+  exact defect_improve_le sys _
 
-/-- The bounds theorem: with a nonzero average loss, the index lies in
-`[0, 100]`. -/
-theorem rsiFromAverages_bounds {g l : Rat} (hg : 0 ≤ g) (hl : 0 ≤ l)
-    (hl0 : l ≠ 0) :
-    0 ≤ rsiFromAverages g l ∧ rsiFromAverages g l ≤ 100 := by
-  have hle_l : l ≤ g + l := by
-    have h : l + 0 ≤ l + g := Rat.add_le_add_left.mpr hg
-    rw [Rat.add_zero, Rat.add_comm l g] at h
-    exact h
-  have hsum_ne : g + l ≠ 0 := by
-    intro h
-    rw [h] at hle_l
-    exact hl0 (Rat.le_antisymm hle_l hl)
-  have hsum_nonneg : 0 ≤ g + l := Rat.add_nonneg hg hl
-  have hinv : 0 ≤ (g + l)⁻¹ := inv_nonneg hsum_nonneg
-  have hg_le : g ≤ g + l := by
-    have h : g + 0 ≤ g + l := Rat.add_le_add_left.mpr hl
-    rwa [Rat.add_zero] at h
-  have hfrac_le : g * (g + l)⁻¹ ≤ 1 := by
-    have h1 : g * (g + l)⁻¹ ≤ (g + l) * (g + l)⁻¹ :=
-      Rat.mul_le_mul_of_nonneg_right hg_le hinv
-    rwa [Rat.mul_inv_cancel _ hsum_ne] at h1
-  have h100 : (0 : Rat) ≤ 100 := by decide
-  unfold rsiFromAverages
-  rw [ite_eq_right hl0, Rat.div_def]
-  constructor
-  · rw [Rat.mul_assoc]
-    exact Rat.mul_nonneg h100 (Rat.mul_nonneg hg hinv)
-  · rw [Rat.mul_assoc]
-    have h := Rat.mul_le_mul_of_nonneg_left hfrac_le h100
-    rwa [Rat.mul_one] at h
+/-- The key invariant: after `n` rounds, either the defect has already
+reached zero, or it has fallen by at least `n`. -/
+theorem defect_run (sys : SelfImprover S) :
+    ∀ n s, sys.defect (run sys n s) + n ≤ sys.defect s ∨
+      sys.defect (run sys n s) = 0 := by
+  intro n
+  induction n with
+  | zero =>
+      intro s
+      left
+      show sys.defect s + 0 ≤ sys.defect s
+      omega
+  | succ n ih =>
+      intro s
+      by_cases h0 : sys.defect (run sys n s) = 0
+      · right
+        show sys.defect (sys.improve (run sys n s)) = 0
+        rw [sys.consistent _ h0]
+        exact h0
+      · left
+        have hprog : sys.defect (sys.improve (run sys n s)) <
+            sys.defect (run sys n s) := sys.progress _ h0
+        obtain h | h := ih s
+        · show sys.defect (sys.improve (run sys n s)) + (n + 1) ≤ sys.defect s
+          omega
+        · exact absurd h h0
 
-/-- No movement at all: the neutral value 50. -/
-theorem rsiFromAverages_flat : rsiFromAverages 0 0 = 50 := by
-  unfold rsiFromAverages
-  rw [ite_eq_left rfl, ite_eq_left rfl]
+/-- Termination with an explicit bound: from any state, iterated
+self-improvement reaches a defect-zero state within `defect s` rounds. -/
+theorem terminates_within (sys : SelfImprover S) (s : S) :
+    ∃ n, n ≤ sys.defect s ∧ sys.defect (run sys n s) = 0 := by
+  refine ⟨sys.defect s, Nat.le_refl _, ?_⟩
+  obtain h | h := defect_run sys (sys.defect s) s
+  · omega
+  · exact h
 
-/-- No loss at all: the maximal value 100. -/
-theorem rsiFromAverages_no_loss {g : Rat} (hg : g ≠ 0) :
-    rsiFromAverages g 0 = 100 := by
-  unfold rsiFromAverages
-  rw [ite_eq_left rfl, ite_eq_right hg]
+/-- Runs compose: `a + b` rounds are `a` rounds followed by `b` rounds. -/
+theorem run_add (sys : SelfImprover S) :
+    ∀ a b s, run sys (a + b) s = run sys b (run sys a s) := by
+  intro a b
+  induction b with
+  | zero =>
+      intro s
+      rw [Nat.add_zero, run_zero]
+  | succ b ih =>
+      intro s
+      rw [Nat.add_succ]
+      show sys.improve (run sys (a + b) s) =
+        sys.improve (run sys b (run sys a s))
+      rw [ih s]
 
-/-- One Wilder smoothing step: fold a new price change into the running
-average gain and average loss. -/
-def wilderStep (period : Nat) (avg : Rat × Rat) (d : Rat) : Rat × Rat :=
-  let p : Rat := (period : Rat)
-  ((avg.1 * (p - 1) + gain d) / p, (avg.2 * (p - 1) + loss d) / p)
+/-- The self-consistent attractor: from any state, iterated
+self-improvement reaches a state that the system no longer rewrites,
+and once the orbit arrives there it stays there forever. -/
+theorem reaches_consistent (sys : SelfImprover S) (s : S) :
+    ∃ t, (∃ n, run sys n s = t) ∧ sys.defect t = 0 ∧ sys.improve t = t ∧
+      ∀ m, run sys m t = t := by
+  obtain ⟨n, -, hn⟩ := terminates_within sys s
+  refine ⟨run sys n s, ⟨n, rfl⟩, hn, sys.consistent _ hn, ?_⟩
+  intro m
+  induction m with
+  | zero => rfl
+  | succ m ihm =>
+      show sys.improve (run sys m (run sys n s)) = run sys n s
+      rw [ihm]
+      exact sys.consistent _ hn
 
-/-- The RSI of a price series with the given period (14 by default):
-`none` when there are fewer changes than the period, otherwise the
-index after Wilder smoothing over all changes. -/
-def rsi (prices : List Rat) (period : Nat := 14) : Option Rat :=
-  let ds := changes prices
-  if period = 0 ∨ ds.length < period then
-    none
-  else
-    let init := ds.take period
-    let rest := ds.drop period
-    let avgG := (init.map gain).sum / (period : Rat)
-    let avgL := (init.map loss).sum / (period : Rat)
-    let final := rest.foldl (wilderStep period) (avgG, avgL)
-    some (rsiFromAverages final.1 final.2)
+/-- Self-acceleration: the system rewrites its own improvement procedure
+by self-composition — the new procedure is the old one applied twice.
+The result is again a self-improving system, with the same defect. -/
+def accelerate (sys : SelfImprover S) : SelfImprover S where
+  improve := fun s => sys.improve (sys.improve s)
+  defect := sys.defect
+  progress := by
+    intro s hs
+    show sys.defect (sys.improve (sys.improve s)) < sys.defect s
+    by_cases h1 : sys.defect (sys.improve s) = 0
+    · have hfix : sys.improve (sys.improve s) = sys.improve s :=
+        sys.consistent _ h1
+      rw [hfix, h1]
+      exact Nat.pos_of_ne_zero hs
+    · have a := sys.progress (sys.improve s) h1
+      have b := sys.progress s hs
+      omega
+  consistent := by
+    intro s hs
+    show sys.improve (sys.improve s) = s
+    have h := sys.consistent s hs
+    rw [h, h]
 
-/-- The sample price series used to check the companion Python
-implementation, scaled by 100 (the index is scale-invariant, so the
-values agree exactly). -/
-def samplePrices : List Rat :=
-  [4434, 4409, 4415, 4361, 4433, 4483, 4510, 4542, 4584, 4608,
-   4589, 4603, 4561, 4628, 4628, 4600, 4603, 4641, 4622, 4564,
-   4621, 4625, 4571, 4645, 4578, 4535, 4403, 4418, 4422, 4457,
-   4342, 4266]
+/-- One round of the accelerated system is two rounds of the original:
+the `n`-step run of the self-accelerated system is the `2n`-step run of
+the original. -/
+theorem run_accelerate (sys : SelfImprover S) :
+    ∀ n s, run (accelerate sys) n s = run sys (2 * n) s := by
+  intro n
+  induction n with
+  | zero => intro s; rfl
+  | succ n ih =>
+      intro s
+      show sys.improve (sys.improve (run (accelerate sys) n s)) =
+        run sys (2 * (n + 1)) s
+      rw [ih s]
+      have h2 : 2 * (n + 1) = 2 * n + 2 := by omega
+      rw [h2]
+      rfl
 
-/- The worked sample, checked by evaluation: the final RSI of
-`samplePrices` is `338112527124029046860900 / 10217817959618882469739`
-(approximately 33.09), in agreement with the companion Python
-implementation. Rational arithmetic does not reduce in core Lean's
-kernel, so this is an `#eval` check rather than a theorem. -/
-#eval rsi samplePrices 14
+/-- Arbitrarily many self-rewritings of the improvement procedure:
+`metaRun k sys` is `sys` after `k` rounds of self-acceleration. -/
+def metaRun : Nat → SelfImprover S → SelfImprover S
+  | 0, sys => sys
+  | k + 1, sys => accelerate (metaRun k sys)
+
+/-- Self-rewriting never changes the defect measure. -/
+theorem metaRun_defect (sys : SelfImprover S) :
+    ∀ k, (metaRun k sys).defect = sys.defect
+  | 0 => rfl
+  | k + 1 => metaRun_defect sys k
+
+/-- Termination is preserved under arbitrarily many self-rewritings of
+the improvement procedure, within the same defect bound. -/
+theorem meta_terminates (sys : SelfImprover S) (k : Nat) (s : S) :
+    ∃ n, n ≤ sys.defect s ∧ sys.defect (run (metaRun k sys) n s) = 0 := by
+  obtain ⟨n, hn1, hn2⟩ := terminates_within (metaRun k sys) s
+  refine ⟨n, ?_, ?_⟩
+  · rwa [metaRun_defect sys k] at hn1
+  · rwa [metaRun_defect sys k] at hn2
+
+/-- The countdown machine: the state is a natural number, a round of
+self-improvement halves it, and the defect is the number itself.
+A concrete self-improving system. -/
+def countdown : SelfImprover Nat where
+  improve := fun n => n / 2
+  defect := fun n => n
+  progress := by
+    intro n hn
+    show n / 2 < n
+    omega
+  consistent := by
+    intro n hn
+    have hn' : n = 0 := hn
+    show n / 2 = n
+    rw [hn']
+
+/-- Seven rounds of self-improvement take 100 to the self-consistent
+state 0. -/
+theorem countdown_example : run countdown 7 100 = 0 :=
+  rfl
 
 end RSI

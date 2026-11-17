@@ -1,120 +1,128 @@
-"""RSI (Relative Strength Index) — 相対力指数
+"""RSI — Recursive Self-Improvement.
 
-J. Welles Wilder Jr. が 1978 年に発表したモメンタム指標 RSI の実装。
-依存ライブラリなし（Python 標準のみ）。
+A small executable companion to RSI.lean, in the descent style of
+DescentCore.
 
-定義:
-    変化 = 終値[t] - 終値[t-1]
-    上昇幅 gain = max(変化, 0), 下落幅 loss = max(-変化, 0)
-    RS  = 平均上昇幅 / 平均下落幅
-    RSI = 100 - 100 / (1 + RS)
+A self-improving system applies an improvement procedure to its own
+current state. A natural-number ``defect`` measures how far the state is
+from a self-consistent one: while the defect is positive, one round of
+improvement strictly lowers it; at defect zero the state is a fixed
+point — the system no longer rewrites itself.
 
-平均の取り方で2方式ある:
-    - Wilder 方式（原典）: 平滑化平均（alpha = 1/期間 の指数平滑）
-    - Cutler 方式: 単純移動平均
+Guarantees (proved in RSI.lean; checked here on the concrete instance):
 
-使い方:
-    from rsi import rsi
-    values = rsi([44.34, 44.09, 44.15, ...], period=14)
-    # 先頭 period 個は None（計算に必要な本数が揃うまで）
+* Termination within a bound: iterated self-improvement reaches a
+  defect-zero state within ``defect(state)`` rounds.
+* Monotonicity: self-improvement never makes the defect worse.
+* Self-acceleration: the system may rewrite its own improvement
+  procedure by self-composition (the new procedure is the old one
+  applied twice). The accelerated ``n``-round run equals the original
+  ``2n``-round run, and termination is preserved under arbitrarily many
+  such self-rewritings.
+
+Standard library only.
+
+Author: Takeo Yamamoto
+License: Apache-2.0
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Callable, Generic, TypeVar
 
-def _changes(prices: list[float]) -> tuple[list[float], list[float]]:
-    gains: list[float] = []
-    losses: list[float] = []
-    for prev, cur in zip(prices, prices[1:]):
-        diff = cur - prev
-        gains.append(diff if diff > 0 else 0.0)
-        losses.append(-diff if diff < 0 else 0.0)
-    return gains, losses
+S = TypeVar("S")
 
 
-def _rsi_from_averages(avg_gain: float, avg_loss: float) -> float:
-    if avg_loss == 0.0:
-        # 下落が一度もない場合は 100、横ばい（両方 0）は中立の 50
-        return 100.0 if avg_gain > 0 else 50.0
-    if avg_gain == 0.0:
-        return 0.0
-    rs = avg_gain / avg_loss
-    return 100.0 - 100.0 / (1.0 + rs)
+@dataclass(frozen=True)
+class SelfImprover(Generic[S]):
+    """An improvement procedure plus its defect measure.
+
+    ``progress`` and ``consistent`` from RSI.lean are the caller's
+    contract: ``defect(improve(s)) < defect(s)`` whenever
+    ``defect(s) > 0``, and ``improve(s) == s`` whenever
+    ``defect(s) == 0``.
+    """
+
+    improve: Callable[[S], S]
+    defect: Callable[[S], int]
+
+    def run(self, rounds: int, state: S) -> S:
+        """The state after ``rounds`` rounds of self-improvement."""
+        for _ in range(rounds):
+            state = self.improve(state)
+        return state
+
+    def run_to_consistent(self, state: S) -> tuple[S, int]:
+        """Iterate self-improvement to the self-consistent attractor.
+
+        Returns ``(final_state, rounds_used)``. By the termination
+        theorem this takes at most ``defect(state)`` rounds.
+        """
+        bound = self.defect(state)
+        rounds = 0
+        while self.defect(state) > 0:
+            state = self.improve(state)
+            rounds += 1
+            if rounds > bound:  # cannot happen for a valid SelfImprover
+                raise AssertionError("termination bound violated")
+        return state, rounds
+
+    def accelerate(self) -> "SelfImprover[S]":
+        """Rewrite the improvement procedure by self-composition.
+
+        The new procedure is the old one applied twice per round; the
+        defect measure is unchanged.
+        """
+        improve = self.improve
+        return SelfImprover(lambda s: improve(improve(s)), self.defect)
+
+    def meta_run(self, rewritings: int) -> "SelfImprover[S]":
+        """This system after ``rewritings`` rounds of self-acceleration."""
+        sys = self
+        for _ in range(rewritings):
+            sys = sys.accelerate()
+        return sys
 
 
-def rsi_wilder(prices: list[float], period: int = 14) -> list[float | None]:
-    """Wilder 方式（原典）の RSI。戻り値は prices と同じ長さで、
-    インデックス period 未満は None。"""
-    if period < 1:
-        raise ValueError("period must be >= 1")
-    n = len(prices)
-    result: list[float | None] = [None] * n
-    if n <= period:
-        return result
-    gains, losses = _changes(prices)
-    # 最初の平均は period 本の単純平均
-    avg_gain = sum(gains[:period]) / period
-    avg_loss = sum(losses[:period]) / period
-    result[period] = _rsi_from_averages(avg_gain, avg_loss)
-    # 以後は Wilder の平滑化: avg = (avg * (period-1) + current) / period
-    for i in range(period, n - 1):
-        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
-        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
-        result[i + 1] = _rsi_from_averages(avg_gain, avg_loss)
-    return result
+def countdown() -> SelfImprover[int]:
+    """The countdown machine: a round of self-improvement halves the
+    number; the defect is the number itself."""
+    return SelfImprover(lambda n: n // 2, lambda n: n)
 
 
-def rsi_cutler(prices: list[float], period: int = 14) -> list[float | None]:
-    """Cutler 方式（単純移動平均）の RSI。"""
-    if period < 1:
-        raise ValueError("period must be >= 1")
-    n = len(prices)
-    result: list[float | None] = [None] * n
-    if n <= period:
-        return result
-    gains, losses = _changes(prices)
-    for end in range(period, n):
-        window_g = gains[end - period:end]
-        window_l = losses[end - period:end]
-        result[end] = _rsi_from_averages(
-            sum(window_g) / period, sum(window_l) / period
-        )
-    return result
+def _self_check() -> None:
+    sys = countdown()
 
+    # Termination within the bound, at the self-consistent fixed point.
+    final, rounds = sys.run_to_consistent(100)
+    assert final == 0 and sys.improve(final) == final
+    assert rounds == 7 and rounds <= sys.defect(100)
+    assert [sys.run(k, 100) for k in range(8)] == [100, 50, 25, 12, 6, 3, 1, 0]
 
-def rsi(prices: list[float], period: int = 14, method: str = "wilder") -> list[float | None]:
-    """RSI を計算する。method は "wilder"（既定）または "cutler"。"""
-    if method == "wilder":
-        return rsi_wilder(prices, period)
-    if method == "cutler":
-        return rsi_cutler(prices, period)
-    raise ValueError(f"unknown method: {method!r}")
+    # Monotonicity: the defect never grows along the orbit.
+    orbit = [sys.defect(sys.run(k, 100)) for k in range(8)]
+    assert all(b <= a for a, b in zip(orbit, orbit[1:]))
+
+    # Self-acceleration: the accelerated n-round run is the original
+    # 2n-round run (the run_accelerate theorem of RSI.lean).
+    acc = sys.accelerate()
+    for n in range(5):
+        assert acc.run(n, 100) == sys.run(2 * n, 100)
+    acc_final, acc_rounds = acc.run_to_consistent(100)
+    assert acc_final == 0 and acc_rounds == 4
+
+    # Arbitrarily many self-rewritings preserve termination and defect.
+    for k in range(4):
+        meta = sys.meta_run(k)
+        assert meta.defect(100) == sys.defect(100)
+        meta_final, meta_rounds = meta.run_to_consistent(100)
+        assert meta_final == 0 and meta_rounds <= sys.defect(100)
+
+    print("rsi.py self-check OK")
+    print(f"  countdown from 100: {rounds} rounds to the fixed point 0")
+    print(f"  self-accelerated:   {acc_rounds} rounds")
 
 
 if __name__ == "__main__":
-    # Wilder の原典『New Concepts in Technical Trading Systems』に近い
-    # 検証用の系列で自己チェックする
-    sample = [
-        44.34, 44.09, 44.15, 43.61, 44.33, 44.83, 45.10, 45.42,
-        45.84, 46.08, 45.89, 46.03, 45.61, 46.28, 46.28, 46.00,
-        46.03, 46.41, 46.22, 45.64, 46.21, 46.25, 45.71, 46.45,
-        45.78, 45.35, 44.03, 44.18, 44.22, 44.57, 43.42, 42.66,
-    ]
-    w = rsi_wilder(sample, 14)
-    c = rsi_cutler(sample, 14)
-    print("index  price   RSI(Wilder)  RSI(Cutler)")
-    for i, (p, wv, cv) in enumerate(zip(sample, w, c)):
-        ws = f"{wv:8.2f}" if wv is not None else "     ---"
-        cs = f"{cv:8.2f}" if cv is not None else "     ---"
-        print(f"{i:5d}  {p:6.2f}  {ws}    {cs}")
-
-    # 性質のチェック
-    up = [float(i) for i in range(30)]            # 上がり続ける
-    down = [float(30 - i) for i in range(30)]     # 下がり続ける
-    flat = [10.0] * 30                            # 横ばい
-    assert rsi_wilder(up)[-1] == 100.0
-    assert rsi_wilder(down)[-1] == 0.0
-    assert rsi_wilder(flat)[-1] == 50.0
-    assert all(0.0 <= v <= 100.0 for v in w if v is not None)
-    assert all(v is None for v in rsi_wilder([1.0, 2.0, 3.0], 14))
-    print("self-check: OK")
+    _self_check()
