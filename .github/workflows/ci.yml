@@ -30,7 +30,7 @@ jobs:
         run: |
           set -eo pipefail
           : > build.log
-          for f in DescentCore.lean UniversalCore.lean VonNeumannCore.lean TowerCore.lean RSI.lean; do
+          for f in DescentCore.lean UniversalCore.lean VonNeumannCore.lean TowerCore.lean RSI.lean QuantumCore.lean; do
             echo "== $f"
             lean "$f" 2>&1 | tee -a build.log
           done
