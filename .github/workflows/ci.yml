@@ -26,11 +26,11 @@ jobs:
           elan default leanprover/lean4:v4.36.0-rc2
           lean --version
 
-      - name: Check all eight Lean files (compile; fail on any sorry)
+      - name: Check all ten Lean files (compile; fail on any sorry)
         run: |
           set -eo pipefail
           : > build.log
-          for f in DescentCore.lean UniversalCore.lean VonNeumannCore.lean TowerCore.lean RSI.lean QuantumCore.lean LinearCore.lean PolyCore.lean; do
+          for f in DescentCore.lean UniversalCore.lean VonNeumannCore.lean TowerCore.lean RSI.lean QuantumCore.lean LinearCore.lean PolyCore.lean NewComputer.lean NewAI.lean; do
             echo "== $f"
             lean "$f" 2>&1 | tee -a build.log
           done
